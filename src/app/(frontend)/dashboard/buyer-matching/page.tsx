@@ -13,29 +13,44 @@ export default async function BuyerMatchingPage() {
   const isDemo = !sessionUser
 
   const payload = await getPayload({ config })
-  const [contactResult, conversationResult, messageResult] = await Promise.all([
-    payload.find({
-      collection: 'users',
-      where: user.role ? { role: { not_equals: user.role } } : {},
-      limit: 100,
-      sort: 'name',
-      overrideAccess: true,
-    }),
-    payload.find({
-      collection: 'conversations',
-      sort: '-lastMessageAt',
-      depth: 1,
-      limit: 100,
-      overrideAccess: true,
-    }),
-    payload.find({
-      collection: 'messages',
-      sort: 'createdAt',
-      depth: 1,
-      limit: 500,
-      overrideAccess: true,
-    }),
-  ])
+
+  // Daftar kontak (hanya field non-sensitif yang diteruskan ke klien, lihat toContact).
+  const contactResult = await payload.find({
+    collection: 'users',
+    where: user.role ? { role: { not_equals: user.role } } : {},
+    limit: 100,
+    sort: 'name',
+    overrideAccess: true,
+  })
+
+  // Percakapan & pesan HANYA untuk akun terdaftar, dan dibatasi oleh aturan akses
+  // koleksi (hanya peserta). Tamu mode demo memakai simulasi di sisi klien, jadi
+  // tidak boleh menerima data obrolan milik pengguna lain.
+  const requestUser = sessionUser ? (sessionUser as never) : undefined
+  const [conversationDocs, messageDocs] = sessionUser
+    ? await Promise.all([
+        payload
+          .find({
+            collection: 'conversations',
+            sort: '-lastMessageAt',
+            depth: 1,
+            limit: 100,
+            user: requestUser,
+            overrideAccess: false,
+          })
+          .then((result) => result.docs),
+        payload
+          .find({
+            collection: 'messages',
+            sort: 'createdAt',
+            depth: 1,
+            limit: 500,
+            user: requestUser,
+            overrideAccess: false,
+          })
+          .then((result) => result.docs),
+      ])
+    : [[], []]
 
   const toContact = (value: (typeof contactResult.docs)[number]): ChatContact => ({
     id: String(value.id),
@@ -49,7 +64,7 @@ export default async function BuyerMatchingPage() {
   const contacts = contactResult.docs.map(toContact)
   const contactMap = new Map(contacts.map((contact) => [contact.id, contact]))
 
-  const rooms: ChatRoom[] = conversationResult.docs.flatMap((conversation) => {
+  const rooms: ChatRoom[] = conversationDocs.flatMap((conversation) => {
     const otherValue = conversation.participants.find(
       (participant) =>
         String(typeof participant === 'object' ? participant.id : participant) !== user.id,
@@ -73,7 +88,7 @@ export default async function BuyerMatchingPage() {
     ]
   })
 
-  const messages: ChatMessage[] = messageResult.docs.map((message) => {
+  const messages: ChatMessage[] = messageDocs.map((message) => {
     const sender = typeof message.sender === 'object' ? message.sender : null
     const conversationId =
       typeof message.conversation === 'object' ? message.conversation.id : message.conversation

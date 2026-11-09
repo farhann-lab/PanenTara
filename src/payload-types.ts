@@ -109,7 +109,7 @@ export interface Config {
     'payload-llm-instructions': PayloadLlmInstructionsSelect<false> | PayloadLlmInstructionsSelect<true>;
   };
   db: {
-    defaultIDType: number;
+    defaultIDType: string;
   };
   fallbackLocale: ('false' | 'none' | 'null') | false | null | 'en' | 'en'[];
   globals: {};
@@ -169,24 +169,24 @@ export interface UserAuthOperations {
  * via the `definition` "admins".
  */
 export interface Admin {
-  id: number;
+  id: string;
   createdBy?:
     | ({
         relationTo: 'admins';
-        value: number | Admin;
+        value: string | Admin;
       } | null)
     | ({
         relationTo: 'users';
-        value: number | User;
+        value: string | User;
       } | null);
   updatedBy?:
     | ({
         relationTo: 'admins';
-        value: number | Admin;
+        value: string | Admin;
       } | null)
     | ({
         relationTo: 'users';
-        value: number | User;
+        value: string | User;
       } | null);
   updatedAt: string;
   createdAt: string;
@@ -213,31 +213,31 @@ export interface Admin {
  * via the `definition` "users".
  */
 export interface User {
-  id: number;
+  id: string;
   name: string;
   role: 'petani' | 'pembeli';
   companyName?: string | null;
   location?: string | null;
   phone?: string | null;
   commodities?: string | null;
-  avatar?: (number | null) | Media;
+  avatar?: (string | null) | Media;
   createdBy?:
     | ({
         relationTo: 'admins';
-        value: number | Admin;
+        value: string | Admin;
       } | null)
     | ({
         relationTo: 'users';
-        value: number | User;
+        value: string | User;
       } | null);
   updatedBy?:
     | ({
         relationTo: 'admins';
-        value: number | Admin;
+        value: string | Admin;
       } | null)
     | ({
         relationTo: 'users';
-        value: number | User;
+        value: string | User;
       } | null);
   updatedAt: string;
   createdAt: string;
@@ -264,27 +264,27 @@ export interface User {
  * via the `definition` "media".
  */
 export interface Media {
-  id: number;
+  id: string;
   alt: string;
-  _h_folders?: (number | null) | Folder;
-  _h_tags?: (number | Tag)[] | null;
+  _h_folders?: (string | null) | Folder;
+  _h_tags?: (string | Tag)[] | null;
   createdBy?:
     | ({
         relationTo: 'admins';
-        value: number | Admin;
+        value: string | Admin;
       } | null)
     | ({
         relationTo: 'users';
-        value: number | User;
+        value: string | User;
       } | null);
   updatedBy?:
     | ({
         relationTo: 'admins';
-        value: number | Admin;
+        value: string | Admin;
       } | null)
     | ({
         relationTo: 'users';
-        value: number | User;
+        value: string | User;
       } | null);
   updatedAt: string;
   createdAt: string;
@@ -313,26 +313,26 @@ export interface Media {
  * via the `definition` "folders".
  */
 export interface Folder {
-  id: number;
-  _h_folders?: (number | null) | Folder;
+  id: string;
+  _h_folders?: (string | null) | Folder;
   name: string;
   createdBy?:
     | ({
         relationTo: 'admins';
-        value: number | Admin;
+        value: string | Admin;
       } | null)
     | ({
         relationTo: 'users';
-        value: number | User;
+        value: string | User;
       } | null);
   updatedBy?:
     | ({
         relationTo: 'admins';
-        value: number | Admin;
+        value: string | Admin;
       } | null)
     | ({
         relationTo: 'users';
-        value: number | User;
+        value: string | User;
       } | null);
   updatedAt: string;
   createdAt: string;
@@ -344,26 +344,26 @@ export interface Folder {
  * via the `definition` "tags".
  */
 export interface Tag {
-  id: number;
-  _h_tags?: (number | null) | Tag;
+  id: string;
+  _h_tags?: (string | null) | Tag;
   name: string;
   createdBy?:
     | ({
         relationTo: 'admins';
-        value: number | Admin;
+        value: string | Admin;
       } | null)
     | ({
         relationTo: 'users';
-        value: number | User;
+        value: string | User;
       } | null);
   updatedBy?:
     | ({
         relationTo: 'admins';
-        value: number | Admin;
+        value: string | Admin;
       } | null)
     | ({
         relationTo: 'users';
-        value: number | User;
+        value: string | User;
       } | null);
   updatedAt: string;
   createdAt: string;
@@ -375,8 +375,8 @@ export interface Tag {
  * via the `definition` "conversations".
  */
 export interface Conversation {
-  id: number;
-  participants: (number | User)[];
+  id: string;
+  participants: (string | User)[];
   subject: string;
   commodity?: string | null;
   lastMessage?: string | null;
@@ -384,20 +384,20 @@ export interface Conversation {
   createdBy?:
     | ({
         relationTo: 'admins';
-        value: number | Admin;
+        value: string | Admin;
       } | null)
     | ({
         relationTo: 'users';
-        value: number | User;
+        value: string | User;
       } | null);
   updatedBy?:
     | ({
         relationTo: 'admins';
-        value: number | Admin;
+        value: string | Admin;
       } | null)
     | ({
         relationTo: 'users';
-        value: number | User;
+        value: string | User;
       } | null);
   updatedAt: string;
   createdAt: string;
@@ -407,28 +407,28 @@ export interface Conversation {
  * via the `definition` "messages".
  */
 export interface Message {
-  id: number;
-  conversation: number | Conversation;
-  sender: number | User;
-  participants: (number | User)[];
+  id: string;
+  conversation: string | Conversation;
+  sender: string | User;
+  participants: (string | User)[];
   body: string;
   createdBy?:
     | ({
         relationTo: 'admins';
-        value: number | Admin;
+        value: string | Admin;
       } | null)
     | ({
         relationTo: 'users';
-        value: number | User;
+        value: string | User;
       } | null);
   updatedBy?:
     | ({
         relationTo: 'admins';
-        value: number | Admin;
+        value: string | Admin;
       } | null)
     | ({
         relationTo: 'users';
-        value: number | User;
+        value: string | User;
       } | null);
   updatedAt: string;
   createdAt: string;
@@ -438,7 +438,7 @@ export interface Message {
  * via the `definition` "payload-kv".
  */
 export interface PayloadKv {
-  id: number;
+  id: string;
   key: string;
   data:
     | {
@@ -455,45 +455,45 @@ export interface PayloadKv {
  * via the `definition` "payload-locked-documents".
  */
 export interface PayloadLockedDocument {
-  id: number;
+  id: string;
   document?:
     | ({
         relationTo: 'admins';
-        value: number | Admin;
+        value: string | Admin;
       } | null)
     | ({
         relationTo: 'media';
-        value: number | Media;
+        value: string | Media;
       } | null)
     | ({
         relationTo: 'folders';
-        value: number | Folder;
+        value: string | Folder;
       } | null)
     | ({
         relationTo: 'tags';
-        value: number | Tag;
+        value: string | Tag;
       } | null)
     | ({
         relationTo: 'users';
-        value: number | User;
+        value: string | User;
       } | null)
     | ({
         relationTo: 'conversations';
-        value: number | Conversation;
+        value: string | Conversation;
       } | null)
     | ({
         relationTo: 'messages';
-        value: number | Message;
+        value: string | Message;
       } | null);
   globalSlug?: string | null;
   user:
     | {
         relationTo: 'admins';
-        value: number | Admin;
+        value: string | Admin;
       }
     | {
         relationTo: 'users';
-        value: number | User;
+        value: string | User;
       };
   updatedAt: string;
   createdAt: string;
@@ -503,15 +503,15 @@ export interface PayloadLockedDocument {
  * via the `definition` "payload-preferences".
  */
 export interface PayloadPreference {
-  id: number;
+  id: string;
   user:
     | {
         relationTo: 'admins';
-        value: number | Admin;
+        value: string | Admin;
       }
     | {
         relationTo: 'users';
-        value: number | User;
+        value: string | User;
       };
   key?: string | null;
   value?:
@@ -531,7 +531,7 @@ export interface PayloadPreference {
  * via the `definition` "payload-migrations".
  */
 export interface PayloadMigration {
-  id: number;
+  id: string;
   name?: string | null;
   batch?: number | null;
   updatedAt: string;
@@ -551,20 +551,20 @@ export interface PayloadLlmInstruction {
   createdBy?:
     | ({
         relationTo: 'admins';
-        value: number | Admin;
+        value: string | Admin;
       } | null)
     | ({
         relationTo: 'users';
-        value: number | User;
+        value: string | User;
       } | null);
   updatedBy?:
     | ({
         relationTo: 'admins';
-        value: number | Admin;
+        value: string | Admin;
       } | null)
     | ({
         relationTo: 'users';
-        value: number | User;
+        value: string | User;
       } | null);
   updatedAt: string;
   createdAt: string;

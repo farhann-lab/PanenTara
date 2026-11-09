@@ -1,6 +1,6 @@
 import 'server-only'
 
-import config from '@/payload.config.figma'
+import config from '@payload-config'
 import { getPayload } from 'payload'
 import { cookies } from 'next/headers'
 

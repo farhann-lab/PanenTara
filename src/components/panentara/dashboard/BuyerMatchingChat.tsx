@@ -31,6 +31,8 @@ export type ChatMessage = {
   createdAt: string
 }
 
+export type ContractType = 'Kontrak Rutin' | 'Off-taker Industri' | 'Spot Order' | 'Horeka Mitra'
+
 export type BuyerCatalogItem = {
   id: string
   companyName: string
@@ -39,7 +41,7 @@ export type BuyerCatalogItem = {
   commodity: string
   variety: string
   demandVolume: string
-  contractType: 'Kontrak Rutin' | 'Off-taker Industri' | 'Spot Order' | 'Horeka Mitra'
+  contractType: ContractType
   targetPriceRange: string
   deliveryLocation: string
   deliveryTerms: string
@@ -82,6 +84,8 @@ type Props = {
   isDemo?: boolean
 }
 
+type ContractFilter = 'Semua' | ContractType
+
 const initials = (name: string) =>
   name
     .split(' ')
@@ -98,6 +102,13 @@ const formatTime = (value?: string | null) => {
     minute: '2-digit',
   }).format(new Date(value))
 }
+
+// Room lokal (dibuat di browser, belum tentu ada di database).
+// ID room asli dari database berbentuk uuid dan tidak diawali "room-".
+const isLocalRoomId = (id: string) => id.startsWith('room-')
+
+// Room yang hanya simulasi: sesi demo atau kartu katalog statis. Tidak pernah disimpan ke database.
+const isSimulatedRoomId = (id: string) => id.startsWith('room-catalog-') || id.startsWith('room-demo-')
 
 const CURATED_BUYER_CATALOG: BuyerCatalogItem[] = [
   {
@@ -315,6 +326,8 @@ const CURATED_FARMER_SUPPLIES: FarmerSupplyItem[] = [
   },
 ]
 
+const COMMODITY_OPTIONS = ['Semua', 'Cabai Merah', 'Bawang Merah', 'Jagung', 'Tomat', 'Beras', 'Jahe']
+
 export default function BuyerMatchingChat({
   currentUser,
   contacts,
@@ -330,41 +343,56 @@ export default function BuyerMatchingChat({
   const [selectedCatalogItem, setSelectedCatalogItem] = useState<BuyerCatalogItem | null>(null)
   const [specModalItem, setSpecModalItem] = useState<BuyerCatalogItem | null>(null)
 
-  // Search & Filter state
+  // Search & filter state
   const [search, setSearch] = useState('')
   const [selectedCommodity, setSelectedCommodity] = useState('Semua')
-  const [selectedContractType, setSelectedContractType] = useState('Semua')
+  const [selectedContractType, setSelectedContractType] = useState<ContractFilter>('Semua')
   const [highMatchOnly, setHighMatchOnly] = useState(false)
   const [draft, setDraft] = useState('')
   const [notice, setNotice] = useState('')
   const [isPending, startTransition] = useTransition()
 
-  // Sync when server data changes
+  // Gabungkan data server dengan room lokal. Room lokal yang belum tersimpan (room-*)
+  // dipertahankan, sehingga room yang baru dibuat tidak hilang saat data server diperbarui.
   useEffect(() => {
-    setRooms(initialRooms)
-    if (!activeRoomId && initialRooms[0]?.id) {
-      setActiveRoomId(initialRooms[0].id)
-    }
-  }, [initialRooms, activeRoomId])
+    setRooms((prev) => {
+      const localOnly = prev.filter(
+        (room) => isLocalRoomId(room.id) && !initialRooms.some((serverRoom) => serverRoom.id === room.id),
+      )
+      return [...localOnly, ...initialRooms]
+    })
+  }, [initialRooms])
 
   useEffect(() => {
-    setMessages(initialMessages)
+    setMessages((prev) => {
+      const localOnly = prev.filter(
+        (message) => !initialMessages.some((serverMessage) => serverMessage.id === message.id),
+      )
+      return [...initialMessages, ...localOnly]
+    })
   }, [initialMessages])
 
-  // Merge real database contacts into catalog
+  // Pilih room pertama jika belum ada room yang aktif.
+  useEffect(() => {
+    if (!activeRoomId && rooms[0]?.id) {
+      setActiveRoomId(rooms[0].id)
+    }
+  }, [rooms, activeRoomId])
+
+  // Katalog: kartu statis + pembeli terdaftar dari database.
   const catalogDemands = useMemo(() => {
     const list = [...CURATED_BUYER_CATALOG]
-    // If there are real users with buyer role from database, add them
     contacts
-      .filter((c) => c.role === 'pembeli')
+      .filter((contact) => contact.role === 'pembeli')
       .forEach((buyerUser) => {
+        const displayName = buyerUser.companyName || buyerUser.name
         const alreadyExists = list.some(
-          (item) => item.companyName.toLowerCase() === (buyerUser.companyName || buyerUser.name).toLowerCase(),
+          (item) => item.companyName.toLowerCase() === displayName.toLowerCase(),
         )
         if (!alreadyExists) {
           list.unshift({
             id: `db-buyer-${buyerUser.id}`,
-            companyName: buyerUser.companyName || buyerUser.name,
+            companyName: displayName,
             companyType: 'Pembeli Terdaftar PanenTara',
             verifiedBadge: 'Akun Terverifikasi',
             commodity: buyerUser.commodities || 'Cabai Merah & Bawang Merah',
@@ -376,11 +404,7 @@ export default function BuyerMatchingChat({
             deliveryTerms: 'Franco Hub Distribusi',
             aiMatchScore: 96,
             matchReason: 'Mitra aktif di sistem dengan preferensi komoditas sesuai profil Anda',
-            qualityCriteria: [
-              'Mutu super siap pasar',
-              'Kadar air normal panen',
-              'Bebas cacat fisik parah',
-            ],
+            qualityCriteria: ['Mutu super siap pasar', 'Kadar air normal panen', 'Bebas cacat fisik parah'],
             paymentTerms: 'Escrow PanenTara H+1',
             estimatedValue: 'Rp 64.000.000 / bulan',
             urgency: 'Mendesak',
@@ -393,26 +417,19 @@ export default function BuyerMatchingChat({
     return list
   }, [contacts])
 
-  // Filter catalog
   const filteredCatalog = useMemo(() => {
     const query = search.toLowerCase()
     return catalogDemands.filter((item) => {
       const matchQuery =
         !query ||
-        [
-          item.companyName,
-          item.commodity,
-          item.variety,
-          item.deliveryLocation,
-          item.companyType,
-        ].some((text) => text.toLowerCase().includes(query))
+        [item.companyName, item.commodity, item.variety, item.deliveryLocation, item.companyType].some((text) =>
+          text.toLowerCase().includes(query),
+        )
 
       const matchCommodity =
-        selectedCommodity === 'Semua' ||
-        item.commodity.toLowerCase().includes(selectedCommodity.toLowerCase())
+        selectedCommodity === 'Semua' || item.commodity.toLowerCase().includes(selectedCommodity.toLowerCase())
 
-      const matchContract =
-        selectedContractType === 'Semua' || item.contractType === selectedContractType
+      const matchContract = selectedContractType === 'Semua' || item.contractType === selectedContractType
 
       const matchScore = !highMatchOnly || item.aiMatchScore >= 90
 
@@ -423,32 +440,31 @@ export default function BuyerMatchingChat({
   const activeRoom = rooms.find((room) => room.id === activeRoomId)
   const activeMessages = messages.filter((message) => message.conversationId === activeRoomId)
 
-  // Active catalog item linked to current room
   const currentRoomCatalogItem = useMemo(() => {
     if (selectedCatalogItem) return selectedCatalogItem
     if (!activeRoom) return null
+    const partnerName = (activeRoom.other.companyName || activeRoom.other.name).toLowerCase()
     return (
       catalogDemands.find(
         (item) =>
-          item.companyName.toLowerCase() ===
-            (activeRoom.other.companyName || activeRoom.other.name).toLowerCase() ||
+          item.companyName.toLowerCase() === partnerName ||
           (activeRoom.commodity && item.commodity.toLowerCase().includes(activeRoom.commodity.toLowerCase())),
       ) || null
     )
   }, [activeRoom, selectedCatalogItem, catalogDemands])
 
-  // Action when user clicks "Chat & Negosiasi Sekarang" from catalog
+  // Dipanggil saat tombol "Chat & Negosiasi Sekarang" ditekan.
   const handleStartChatFromCatalog = (item: BuyerCatalogItem) => {
     setSelectedCatalogItem(item)
     setDraft(item.suggestedOffer)
     setNotice('')
 
-    // Check if room with this company already exists
+    // Jika room dengan pembeli ini sudah ada, langsung buka.
     const existingRoom = rooms.find(
-      (r) =>
-        r.other.companyName?.toLowerCase() === item.companyName.toLowerCase() ||
-        r.other.name.toLowerCase() === item.companyName.toLowerCase() ||
-        (item.recipientUserId && r.other.id === item.recipientUserId),
+      (room) =>
+        room.other.companyName?.toLowerCase() === item.companyName.toLowerCase() ||
+        room.other.name.toLowerCase() === item.companyName.toLowerCase() ||
+        (item.recipientUserId !== undefined && room.other.id === item.recipientUserId),
     )
 
     if (existingRoom) {
@@ -457,18 +473,16 @@ export default function BuyerMatchingChat({
       return
     }
 
-    // If not existing, create a synthetic room or real room
-    const targetContactId = item.recipientUserId || item.id
-    const newRoomId = `room-${item.id}`
-
-    const newRoom: ChatRoom = {
-      id: newRoomId,
+    // Buat room lokal dulu agar UI langsung responsif.
+    const localRoomId = `room-${item.id}`
+    const localRoom: ChatRoom = {
+      id: localRoomId,
       subject: `Negosiasi ${item.commodity} (${item.demandVolume})`,
       commodity: item.commodity,
       lastMessage: item.suggestedOffer.slice(0, 80) + '...',
       lastMessageAt: new Date().toISOString(),
       other: {
-        id: targetContactId,
+        id: item.recipientUserId ?? item.id,
         name: item.contactPerson,
         role: 'pembeli',
         companyName: item.companyName,
@@ -477,68 +491,118 @@ export default function BuyerMatchingChat({
       },
     }
 
-    setRooms((prev) => [newRoom, ...prev])
-    setActiveRoomId(newRoomId)
+    setRooms((prev) => [localRoom, ...prev])
+    setActiveRoomId(localRoomId)
     setActiveTab('chat')
 
-    // Run server action in background for real users
-    if (!item.id.startsWith('catalog-') && item.recipientUserId) {
-      startTransition(async () => {
-        const result = await startConversation({
-          recipientId: item.recipientUserId!,
-          subject: `Negosiasi ${item.commodity}`,
-          commodity: item.commodity,
-          openingMessage: item.suggestedOffer,
-        })
-        if (result.ok && result.conversationId) {
-          setActiveRoomId(result.conversationId)
-          router.refresh()
-        }
+    // Kartu katalog statis hanya simulasi, tidak disimpan ke database.
+    if (item.recipientUserId === undefined || isSimulatedRoomId(localRoomId)) return
+
+    // Akun pembeli sungguhan: simpan room ke database, lalu ganti ID lokal dengan ID asli.
+    startTransition(async () => {
+      const result = await startConversation({
+        recipientId: item.recipientUserId!,
+        subject: `Negosiasi ${item.commodity}`,
+        commodity: item.commodity,
+        openingMessage: item.suggestedOffer,
       })
-    }
+
+      if (!result.ok || !result.conversationId) {
+        setNotice(result.message || 'Ruang chat belum dapat dibuat.')
+        return
+      }
+
+      const realId = String(result.conversationId)
+      setRooms((prev) => prev.map((room) => (room.id === localRoomId ? { ...room, id: realId } : room)))
+      setMessages((prev) =>
+        prev.map((message) =>
+          message.conversationId === localRoomId ? { ...message, conversationId: realId } : message,
+        ),
+      )
+      setActiveRoomId((current) => (current === localRoomId ? realId : current))
+      router.refresh()
+    })
   }
 
-  // Send message inside chat room
   const handleSendMessage = () => {
     if (!activeRoomId || !draft.trim()) return
-    const text = draft.trim()
-    setDraft('')
 
-    const messageId = `msg-${Date.now()}`
+    const text = draft.trim()
+    const isSimulated = isDemo || isSimulatedRoomId(activeRoomId)
+
+    // Room lokal milik akun pembeli sungguhan: simpan dulu ke database, lalu kirim pesan.
+    if (isLocalRoomId(activeRoomId) && !isSimulated) {
+      const pendingRoom = rooms.find((room) => room.id === activeRoomId)
+      if (!pendingRoom) return
+
+      const localId = pendingRoom.id
+      setDraft('')
+      setNotice('')
+
+      startTransition(async () => {
+        const created = await startConversation({
+          recipientId: pendingRoom.other.id,
+          subject: pendingRoom.subject,
+          commodity: pendingRoom.commodity ?? undefined,
+        })
+
+        if (!created.ok || !created.conversationId) {
+          setNotice(created.message || 'Ruang chat belum dapat dibuat.')
+          setDraft(text)
+          return
+        }
+
+        const realId = String(created.conversationId)
+        setRooms((prev) => prev.map((room) => (room.id === localId ? { ...room, id: realId } : room)))
+        setActiveRoomId((current) => (current === localId ? realId : current))
+
+        const sent = await sendMessage({ conversationId: realId, body: text })
+        if (!sent.ok) {
+          setNotice(sent.message || 'Pesan gagal dikirim.')
+          setDraft(text)
+        }
+        router.refresh()
+      })
+      return
+    }
+
+    const roomIdAtSend = activeRoomId
+    const now = new Date().toISOString()
+    setDraft('')
+    setNotice('')
+
     const userMessage: ChatMessage = {
-      id: messageId,
-      conversationId: activeRoomId,
+      id: `msg-${Date.now()}`,
+      conversationId: roomIdAtSend,
       senderId: currentUser.id,
       senderName: currentUser.name,
       body: text,
-      createdAt: new Date().toISOString(),
+      createdAt: now,
     }
 
     setMessages((prev) => [...prev, userMessage])
     setRooms((prev) =>
-      prev.map((r) =>
-        r.id === activeRoomId
-          ? { ...r, lastMessage: text.slice(0, 100), lastMessageAt: new Date().toISOString() }
-          : r,
+      prev.map((room) =>
+        room.id === roomIdAtSend ? { ...room, lastMessage: text.slice(0, 100), lastMessageAt: now } : room,
       ),
     )
 
-    // Trigger automated smart buyer reply for demo or synthetic rooms
-    const isSimulated = isDemo || activeRoomId.startsWith('room-catalog-') || activeRoomId.startsWith('room-demo-')
+    // Balasan simulasi hanya untuk sesi demo dan kartu katalog statis.
     if (isSimulated) {
       setTimeout(() => {
-        const partnerName = activeRoom?.other.companyName || activeRoom?.other.name || 'Mitra Pembeli'
+        const room = rooms.find((r) => r.id === roomIdAtSend)
+        const partnerName = room?.other.companyName || room?.other.name || 'Mitra Pembeli'
         const autoReplyText =
           text.toLowerCase().includes('harga') || text.includes('Rp')
             ? `Terima kasih atas penawaran harganya, Pak ${currentUser.name.split(' ')[0]}. Kami pelajari skema harga tersebut. Jika mutu sesuai standar Grade A, kami siap sepakati MoU pasokan minggu ini. Kapan kami bisa jadwalkan tim QC ke lokasi?`
             : text.toLowerCase().includes('jadwal') || text.toLowerCase().includes('kirim')
               ? `Jadwal pengiriman tersebut sangat sesuai dengan slot bongkar muat di gudang kami. Mohon sertakan surat jalan dan pastikan packing krat terjaga dengan baik.`
-              : `Pesan diterima dengan baik dari ${currentUser.name}. Spesifikasi komoditas ${activeRoom?.commodity || 'panen'} Anda sangat sesuai dengan kebutuhan kami. Mari kita lanjutkan ke penandatanganan kesepakatan kerjasama digital PanenTara.`
+              : `Pesan diterima dengan baik dari ${currentUser.name}. Spesifikasi komoditas ${room?.commodity || 'panen'} Anda sangat sesuai dengan kebutuhan kami. Mari kita lanjutkan ke penandatanganan kesepakatan kerjasama digital PanenTara.`
 
         const botReply: ChatMessage = {
           id: `reply-${Date.now()}`,
-          conversationId: activeRoomId,
-          senderId: activeRoom?.other.id || 'buyer-partner',
+          conversationId: roomIdAtSend,
+          senderId: room?.other.id || 'buyer-partner',
           senderName: partnerName,
           body: autoReplyText,
           createdAt: new Date().toISOString(),
@@ -546,28 +610,27 @@ export default function BuyerMatchingChat({
         setMessages((prev) => [...prev, botReply])
         setRooms((prev) =>
           prev.map((r) =>
-            r.id === activeRoomId
+            r.id === roomIdAtSend
               ? { ...r, lastMessage: autoReplyText.slice(0, 100), lastMessageAt: new Date().toISOString() }
               : r,
           ),
         )
       }, 1200)
+      return
     }
 
-    // Server action execution with overrideAccess: true
+    // Room asli: simpan pesan ke database.
     startTransition(async () => {
-      const res = await sendMessage({ conversationId: activeRoomId, body: text })
-      if (!res.ok && !isSimulated) {
-        setNotice(res.message)
+      const res = await sendMessage({ conversationId: roomIdAtSend, body: text })
+      if (!res.ok) {
+        setNotice(res.message || 'Pesan gagal dikirim.')
       }
     })
   }
 
-  const commoditiesList = ['Semua', 'Cabai Merah', 'Bawang Merah', 'Jagung', 'Tomat', 'Beras', 'Jahe']
-
   return (
     <div className="min-h-full p-4 sm:p-6 lg:p-8 space-y-6">
-      {/* Header Banner */}
+      {/* Header */}
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <div className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-[#7dc27e]">
@@ -585,12 +648,11 @@ export default function BuyerMatchingChat({
               : 'Katalog Pasokan Petani & Ruang Chat Negosiasi'}
           </h1>
           <p className="mt-1 max-w-3xl text-sm leading-6 text-white/50">
-            Jelajahi permintaan resmi dari off-taker, supermarket, dan eksportir terverifikasi.
-            Klik kartu katalog untuk langsung membuka ruang negosiasi chat privat dan menyepakati kontrak panen.
+            Jelajahi permintaan resmi dari off-taker, supermarket, dan eksportir terverifikasi. Klik kartu katalog
+            untuk langsung membuka ruang negosiasi chat privat dan menyepakati kontrak panen.
           </p>
         </div>
 
-        {/* Quick Stats Pill */}
         <div className="flex flex-wrap items-center gap-2 text-xs">
           <div className="flex items-center gap-2 rounded-xl border border-[#4fa05c]/25 bg-[#122b17] px-3.5 py-2 text-[#7dc27e]">
             <span className="h-2 w-2 rounded-full bg-[#4fa05c]" />
@@ -603,16 +665,14 @@ export default function BuyerMatchingChat({
         </div>
       </div>
 
-      {/* Navigation Tabs (Katalog vs Chat vs Tampilan Terpadu) */}
+      {/* Tabs */}
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/8 pb-4">
         <div className="flex items-center gap-1.5 rounded-2xl bg-white/5 p-1 border border-white/8">
           <button
             type="button"
             onClick={() => setActiveTab('catalog')}
             className={`flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-semibold transition-all ${
-              activeTab === 'catalog'
-                ? 'bg-[#1e4226] text-white shadow-md'
-                : 'text-white/60 hover:text-white hover:bg-white/5'
+              activeTab === 'catalog' ? 'bg-[#1e4226] text-white shadow-md' : 'text-white/60 hover:text-white hover:bg-white/5'
             }`}
           >
             <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
@@ -628,9 +688,7 @@ export default function BuyerMatchingChat({
             type="button"
             onClick={() => setActiveTab('chat')}
             className={`flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-semibold transition-all ${
-              activeTab === 'chat'
-                ? 'bg-[#1e4226] text-white shadow-md'
-                : 'text-white/60 hover:text-white hover:bg-white/5'
+              activeTab === 'chat' ? 'bg-[#1e4226] text-white shadow-md' : 'text-white/60 hover:text-white hover:bg-white/5'
             }`}
           >
             <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
@@ -642,7 +700,7 @@ export default function BuyerMatchingChat({
             </svg>
             Ruang Chat Negosiasi
             {rooms.length > 0 && (
-              <span className="rounded-full bg-[#f5a623] px-1.5 py-0.2 text-[10px] font-extrabold text-[#0a1a0e]">
+              <span className="rounded-full bg-[#f5a623] px-1.5 py-0.5 text-[10px] font-extrabold text-[#0a1a0e]">
                 {rooms.length}
               </span>
             )}
@@ -652,9 +710,7 @@ export default function BuyerMatchingChat({
             type="button"
             onClick={() => setActiveTab('split')}
             className={`hidden lg:flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-semibold transition-all ${
-              activeTab === 'split'
-                ? 'bg-[#1e4226] text-white shadow-md'
-                : 'text-white/60 hover:text-white hover:bg-white/5'
+              activeTab === 'split' ? 'bg-[#1e4226] text-white shadow-md' : 'text-white/60 hover:text-white hover:bg-white/5'
             }`}
           >
             <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
@@ -665,7 +721,6 @@ export default function BuyerMatchingChat({
           </button>
         </div>
 
-        {/* High Match Filter Toggle */}
         <div className="flex items-center gap-3">
           <button
             type="button"
@@ -682,11 +737,10 @@ export default function BuyerMatchingChat({
         </div>
       </div>
 
-      {/* Search & Commodity Filters */}
+      {/* Filters */}
       {(activeTab === 'catalog' || activeTab === 'split') && (
         <div className="space-y-3 rounded-2xl border border-white/8 bg-[#0a1a0e] p-4">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            {/* Search Input */}
             <div className="relative flex-1">
               <svg
                 className="absolute left-3.5 top-1/2 -translate-y-1/2 text-white/30"
@@ -717,12 +771,11 @@ export default function BuyerMatchingChat({
               )}
             </div>
 
-            {/* Contract Type Dropdown */}
             <div className="flex items-center gap-2">
               <span className="text-xs text-white/40">Tipe Kerjasama:</span>
               <select
                 value={selectedContractType}
-                onChange={(e) => setSelectedContractType(e.target.value as any)}
+                onChange={(e) => setSelectedContractType(e.target.value as ContractFilter)}
                 className="rounded-xl border border-white/10 bg-[#122b17] px-3 py-2 text-xs text-white outline-none focus:border-[#4fa05c]"
               >
                 <option value="Semua">Semua Tipe</option>
@@ -734,10 +787,9 @@ export default function BuyerMatchingChat({
             </div>
           </div>
 
-          {/* Commodity Pills */}
           <div className="flex items-center gap-2 overflow-x-auto pb-1 pt-1 text-xs">
             <span className="text-white/40 shrink-0">Komoditas:</span>
-            {commoditiesList.map((comm) => (
+            {COMMODITY_OPTIONS.map((comm) => (
               <button
                 key={comm}
                 type="button"
@@ -755,9 +807,8 @@ export default function BuyerMatchingChat({
         </div>
       )}
 
-      {/* Main View Container */}
       <div className="space-y-6">
-        {/* TAB 1: CATALOG VIEW */}
+        {/* TAB 1: KATALOG */}
         {activeTab === 'catalog' && (
           <div>
             {filteredCatalog.length === 0 ? (
@@ -785,7 +836,6 @@ export default function BuyerMatchingChat({
                     className="flex flex-col justify-between rounded-3xl border border-white/8 bg-[#0a1a0e] p-5 shadow-xl transition-all hover:border-[#4fa05c]/30 hover:shadow-black/40"
                   >
                     <div>
-                      {/* Card Header */}
                       <div className="flex items-start justify-between gap-3">
                         <div className="flex items-center gap-3">
                           <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[#122b17] text-sm font-extrabold text-[#7dc27e] ring-1 ring-[#4fa05c]/25">
@@ -797,19 +847,16 @@ export default function BuyerMatchingChat({
                           </div>
                         </div>
 
-                        {/* AI Match Badge */}
                         <div className="flex items-center gap-1 rounded-full bg-[#1e4226] border border-[#4fa05c]/30 px-2.5 py-1 text-[11px] font-bold text-[#7dc27e]">
                           <span>⚡</span>
                           <span>{item.aiMatchScore}%</span>
                         </div>
                       </div>
 
-                      {/* Match Reason snippet */}
                       <p className="mt-3 text-[11px] leading-relaxed text-[#7dc27e]/80 bg-[#122b17]/50 rounded-xl p-2.5 border border-[#4fa05c]/15">
                         💡 {item.matchReason}
                       </p>
 
-                      {/* Metrics Grid */}
                       <div className="mt-4 grid grid-cols-2 gap-2.5 text-xs">
                         <div className="rounded-xl bg-white/4 p-2.5 border border-white/5">
                           <span className="text-[10px] uppercase tracking-wider text-white/35">Komoditas Dicari</span>
@@ -831,7 +878,6 @@ export default function BuyerMatchingChat({
                         </div>
                       </div>
 
-                      {/* Criteria Bullets */}
                       <div className="mt-4 border-t border-white/5 pt-3">
                         <p className="text-[10px] uppercase tracking-wider text-white/30 font-semibold mb-1.5">
                           Spesifikasi Kunci Mutu:
@@ -847,10 +893,11 @@ export default function BuyerMatchingChat({
                       </div>
                     </div>
 
-                    {/* Card Actions Footer */}
                     <div className="mt-5 border-t border-white/8 pt-3 space-y-2">
                       <div className="flex items-center justify-between text-[11px] text-white/40 px-1">
-                        <span>Est. Nilai: <strong className="text-white/70">{item.estimatedValue}</strong></span>
+                        <span>
+                          Est. Nilai: <strong className="text-white/70">{item.estimatedValue}</strong>
+                        </span>
                         <button
                           type="button"
                           onClick={() => setSpecModalItem(item)}
@@ -863,7 +910,8 @@ export default function BuyerMatchingChat({
                       <button
                         type="button"
                         onClick={() => handleStartChatFromCatalog(item)}
-                        className="w-full flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[#1e4226] to-[#285733] hover:from-[#285733] hover:to-[#346e41] text-white py-2.5 px-4 text-xs font-bold transition-all shadow-lg shadow-black/20 border border-[#4fa05c]/30"
+                        disabled={isPending}
+                        className="w-full flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[#1e4226] to-[#285733] hover:from-[#285733] hover:to-[#346e41] text-white py-2.5 px-4 text-xs font-bold transition-all shadow-lg shadow-black/20 border border-[#4fa05c]/30 disabled:opacity-60"
                       >
                         <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
                           <path
@@ -880,7 +928,7 @@ export default function BuyerMatchingChat({
               </div>
             )}
 
-            {/* Secondary Section: Pasokan Petani Mitra */}
+            {/* Pasokan petani */}
             <div className="mt-12 rounded-3xl border border-white/8 bg-[#0a1a0e] p-6">
               <div className="mb-4 flex items-center justify-between">
                 <div>
@@ -907,12 +955,21 @@ export default function BuyerMatchingChat({
                           {supply.aiMatchScore}% Match
                         </span>
                       </div>
-                      <p className="text-xs text-white/40">{supply.groupName} · {supply.location}</p>
+                      <p className="text-xs text-white/40">
+                        {supply.groupName} · {supply.location}
+                      </p>
 
                       <div className="mt-3 space-y-1 text-xs">
-                        <p className="text-white"><strong className="text-white/40">Komoditas:</strong> {supply.commodity}</p>
-                        <p className="text-[#f5a623]"><strong className="text-white/40">Siap Panen:</strong> {supply.projectedVolume} ({supply.harvestDate})</p>
-                        <p className="text-[#7dc27e]"><strong className="text-white/40">Harga Tawar:</strong> {supply.askingPrice}</p>
+                        <p className="text-white">
+                          <strong className="text-white/40">Komoditas:</strong> {supply.commodity}
+                        </p>
+                        <p className="text-[#f5a623]">
+                          <strong className="text-white/40">Siap Panen:</strong> {supply.projectedVolume} (
+                          {supply.harvestDate})
+                        </p>
+                        <p className="text-[#7dc27e]">
+                          <strong className="text-white/40">Harga Tawar:</strong> {supply.askingPrice}
+                        </p>
                       </div>
                     </div>
 
@@ -933,7 +990,7 @@ export default function BuyerMatchingChat({
           </div>
         )}
 
-        {/* TAB 2 & 3: CHAT VIEW OR SPLIT VIEW */}
+        {/* TAB 2 & 3: RUANG CHAT / SPLIT */}
         {(activeTab === 'chat' || activeTab === 'split') && (
           <div
             className={`grid overflow-hidden rounded-3xl border border-white/8 bg-[#0a1a0e] shadow-2xl ${
@@ -942,13 +999,11 @@ export default function BuyerMatchingChat({
                 : 'lg:grid-cols-[340px_minmax(0,1fr)] min-h-[680px]'
             }`}
           >
-            {/* Sidebar: Rooms List */}
+            {/* Daftar room */}
             <aside className="border-b border-white/8 lg:border-b-0 lg:border-r flex flex-col">
               <div className="border-b border-white/8 p-3.5">
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs font-bold text-white uppercase tracking-wider">
-                    Percakapan Negosiasi
-                  </span>
+                  <span className="text-xs font-bold text-white uppercase tracking-wider">Percakapan Negosiasi</span>
                   <button
                     type="button"
                     onClick={() => setActiveTab('catalog')}
@@ -966,7 +1021,6 @@ export default function BuyerMatchingChat({
                 />
               </div>
 
-              {/* Rooms list */}
               <div className="flex-1 overflow-y-auto p-2 space-y-1">
                 {rooms.length === 0 ? (
                   <div className="p-6 text-center text-xs text-white/40">
@@ -991,9 +1045,7 @@ export default function BuyerMatchingChat({
                           setNotice('')
                         }}
                         className={`w-full rounded-2xl p-3 text-left transition-all ${
-                          isActive
-                            ? 'bg-[#1e4226] text-white shadow'
-                            : 'hover:bg-white/5 text-white/70'
+                          isActive ? 'bg-[#1e4226] text-white shadow' : 'hover:bg-white/5 text-white/70'
                         }`}
                       >
                         <div className="flex items-start gap-3">
@@ -1005,9 +1057,7 @@ export default function BuyerMatchingChat({
                               <p className="truncate text-xs font-bold text-white">
                                 {room.other.companyName || room.other.name}
                               </p>
-                              <span className="shrink-0 text-[10px] text-white/30">
-                                {formatTime(room.lastMessageAt)}
-                              </span>
+                              <span className="shrink-0 text-[10px] text-white/30">{formatTime(room.lastMessageAt)}</span>
                             </div>
                             <p className="text-[11px] text-[#7dc27e] font-medium truncate">
                               {room.commodity || room.subject}
@@ -1024,11 +1074,10 @@ export default function BuyerMatchingChat({
               </div>
             </aside>
 
-            {/* Center: Active Chat Room */}
+            {/* Ruang chat aktif */}
             <section className="flex flex-col min-h-[500px]">
               {activeRoom ? (
                 <>
-                  {/* Chat Header */}
                   <header className="flex items-center justify-between border-b border-white/8 px-5 py-3.5 bg-[#0a1a0e]/90">
                     <div className="flex items-center gap-3 min-w-0">
                       <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#f5a623] text-xs font-extrabold text-[#0a1a0e]">
@@ -1049,19 +1098,16 @@ export default function BuyerMatchingChat({
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setActiveTab('catalog')}
-                        className="rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 px-3 py-1.5 text-xs text-white/70 transition-colors flex items-center gap-1.5"
-                      >
-                        <span>←</span>
-                        <span>Lihat Katalog</span>
-                      </button>
-                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('catalog')}
+                      className="rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 px-3 py-1.5 text-xs text-white/70 transition-colors flex items-center gap-1.5"
+                    >
+                      <span>←</span>
+                      <span>Lihat Katalog</span>
+                    </button>
                   </header>
 
-                  {/* INTEGRATED CATALOG CONTEXT BANNER */}
                   {currentRoomCatalogItem && (
                     <div className="border-b border-white/8 bg-[#122b17]/70 p-3.5 px-5 flex flex-wrap items-center justify-between gap-3 text-xs">
                       <div className="flex items-center gap-3 flex-wrap">
@@ -1095,11 +1141,10 @@ export default function BuyerMatchingChat({
                     </div>
                   )}
 
-                  {/* Messages Thread */}
                   <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-3.5 bg-[radial-gradient(circle_at_top_right,rgba(30,66,38,0.18),transparent_40%)]">
                     <div className="mx-auto max-w-md rounded-xl border border-[#f5a623]/20 bg-[#f5a623]/8 p-2.5 text-center text-[11px] leading-relaxed text-white/50">
-                      🔒 Percakapan ini terenkripsi dan dilindungi oleh garansi transaksi PanenTara Escrow.
-                      Pastikan harga, volume panen, dan jadwal serah-terima tertulis secara eksplisit.
+                      🔒 Percakapan ini dilindungi garansi transaksi PanenTara Escrow. Pastikan harga, volume panen,
+                      dan jadwal serah-terima tertulis secara eksplisit.
                     </div>
 
                     {activeMessages.map((msg) => {
@@ -1113,15 +1158,9 @@ export default function BuyerMatchingChat({
                                 : 'bg-white/6 text-white/90 rounded-bl-none border border-white/8'
                             }`}
                           >
-                            {!isOwn && (
-                              <p className="text-[10px] font-bold text-[#7dc27e] mb-1">
-                                {msg.senderName}
-                              </p>
-                            )}
+                            {!isOwn && <p className="text-[10px] font-bold text-[#7dc27e] mb-1">{msg.senderName}</p>}
                             <p className="whitespace-pre-wrap text-xs sm:text-sm leading-relaxed">{msg.body}</p>
-                            <p className="mt-1.5 text-right text-[9px] text-white/35">
-                              {formatTime(msg.createdAt)}
-                            </p>
+                            <p className="mt-1.5 text-right text-[9px] text-white/35">{formatTime(msg.createdAt)}</p>
                           </div>
                         </div>
                       )
@@ -1137,14 +1176,13 @@ export default function BuyerMatchingChat({
                     )}
                   </div>
 
-                  {/* Quick Action Chips */}
                   <div className="border-t border-white/8 bg-[#0a1a0e] px-4 pt-2.5 pb-1 flex items-center gap-2 overflow-x-auto text-[11px]">
                     <span className="text-white/30 shrink-0">Tawar Cepat:</span>
                     <button
                       type="button"
                       onClick={() =>
                         setDraft(
-                          `Kami mengajukan penawaran harga Rp 33.500/kg franco gudang untuk volume 3,5 Ton dengan standar mutu Grade A super. Apakah bisa disetujui?`,
+                          'Kami mengajukan penawaran harga Rp 33.500/kg franco gudang untuk volume 3,5 Ton dengan standar mutu Grade A super. Apakah bisa disetujui?',
                         )
                       }
                       className="shrink-0 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 px-3 py-1 text-white/70 transition-colors"
@@ -1154,9 +1192,7 @@ export default function BuyerMatchingChat({
                     <button
                       type="button"
                       onClick={() =>
-                        setDraft(
-                          `Stok komoditas 3,5 Ton kami sudah terkonfirmasi siap petik sesuai jadwal panen. Mutu mulus dan bebas hama.`,
-                        )
+                        setDraft('Stok komoditas 3,5 Ton kami sudah terkonfirmasi siap petik sesuai jadwal panen. Mutu mulus dan bebas hama.')
                       }
                       className="shrink-0 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 px-3 py-1 text-white/70 transition-colors"
                     >
@@ -1165,9 +1201,7 @@ export default function BuyerMatchingChat({
                     <button
                       type="button"
                       onClick={() =>
-                        setDraft(
-                          `Kami siap mengirim pasokan tahap pertama pada hari Selasa depan via armada pick-up berpendingin.`,
-                        )
+                        setDraft('Kami siap mengirim pasokan tahap pertama pada hari Selasa depan via armada pick-up berpendingin.')
                       }
                       className="shrink-0 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 px-3 py-1 text-white/70 transition-colors"
                     >
@@ -1177,7 +1211,7 @@ export default function BuyerMatchingChat({
                       type="button"
                       onClick={() =>
                         setDraft(
-                          `Dengan ini kami setuju mengikat MoU transaksi jual-beli panen ini sesuai volume dan harga kesepakatan di PanenTara.`,
+                          'Dengan ini kami setuju mengikat MoU transaksi jual-beli panen ini sesuai volume dan harga kesepakatan di PanenTara.',
                         )
                       }
                       className="shrink-0 rounded-full bg-[#122b17] border border-[#4fa05c]/30 px-3 py-1 text-[#7dc27e] font-semibold transition-colors"
@@ -1186,11 +1220,8 @@ export default function BuyerMatchingChat({
                     </button>
                   </div>
 
-                  {/* Input Box */}
                   <div className="border-t border-white/8 p-3.5 bg-[#0a1a0e]">
-                    {notice && (
-                      <p className="mb-2 text-xs text-[#f5a623]">{notice}</p>
-                    )}
+                    {notice && <p className="mb-2 text-xs text-[#f5a623]">{notice}</p>}
                     <div className="flex items-end gap-2.5 rounded-2xl border border-white/10 bg-white/5 p-2 focus-within:border-[#4fa05c]/50">
                       <textarea
                         value={draft}
@@ -1251,7 +1282,7 @@ export default function BuyerMatchingChat({
               )}
             </section>
 
-            {/* Right Pane (SPLIT VIEW ONLY): Details Panel */}
+            {/* Panel rincian (hanya mode split) */}
             {activeTab === 'split' && (
               <aside className="hidden lg:flex flex-col border-l border-white/8 p-4 bg-[#07130a] overflow-y-auto text-xs">
                 <h4 className="font-bold text-white uppercase tracking-wider text-[11px] mb-3">
@@ -1320,7 +1351,7 @@ export default function BuyerMatchingChat({
         )}
       </div>
 
-      {/* MODAL: DETAIL SPESIFIKASI MUTU & KONTRAK */}
+      {/* Modal detail mutu & kontrak */}
       {specModalItem && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm"
@@ -1336,7 +1367,9 @@ export default function BuyerMatchingChat({
                   {specModalItem.verifiedBadge}
                 </span>
                 <h3 className="text-xl font-bold text-white mt-1.5">{specModalItem.companyName}</h3>
-                <p className="text-xs text-white/45">{specModalItem.companyType} · {specModalItem.contactPerson}</p>
+                <p className="text-xs text-white/45">
+                  {specModalItem.companyType} · {specModalItem.contactPerson}
+                </p>
               </div>
               <button
                 type="button"
@@ -1347,7 +1380,6 @@ export default function BuyerMatchingChat({
               </button>
             </div>
 
-            {/* Modal Body */}
             <div className="space-y-4 text-xs">
               <div className="grid grid-cols-2 gap-3">
                 <div className="rounded-xl bg-white/4 p-3 border border-white/5">
@@ -1377,7 +1409,9 @@ export default function BuyerMatchingChat({
               <div className="space-y-2">
                 <div>
                   <span className="text-[10px] text-white/35 uppercase">Titik Pengiriman & Syarat Logistik:</span>
-                  <p className="text-white mt-0.5 font-medium">{specModalItem.deliveryLocation} ({specModalItem.deliveryTerms})</p>
+                  <p className="text-white mt-0.5 font-medium">
+                    {specModalItem.deliveryLocation} ({specModalItem.deliveryTerms})
+                  </p>
                 </div>
                 <div>
                   <span className="text-[10px] text-white/35 uppercase">Ketentuan Pembayaran:</span>
@@ -1386,7 +1420,6 @@ export default function BuyerMatchingChat({
               </div>
             </div>
 
-            {/* Modal Footer */}
             <div className="border-t border-white/8 pt-4 flex items-center justify-end gap-3">
               <button
                 type="button"

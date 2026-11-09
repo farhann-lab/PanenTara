@@ -28,6 +28,7 @@ export default buildConfig({
   secret: payloadSecret,
   db: postgresAdapter({
     pool: { connectionString: databaseURL },
+    idType: 'uuid',
     // Di mode development, tabel dibuat/disinkronkan otomatis (push).
     // Untuk produksi, gunakan migrasi: pnpm payload migrate:create
   }),

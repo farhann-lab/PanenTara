@@ -1,5 +1,5 @@
 import { getPayload } from 'payload'
-import config from '@/payload.config.figma'
+import config from '@payload-config'
 import type { Config } from '@/payload-types'
 
 type CollectionSlug = keyof Config['collections']

@@ -2,7 +2,8 @@
 
 import config from '@payload-config'
 import { getPayload } from 'payload'
-import { getCurrentUser, getDemoUser, setDemoRole } from '@/lib/app-auth'
+import { revalidatePath } from 'next/cache'
+import { getCurrentUser, getDemoUser, setDemoRole, type CurrentAppUser } from '@/lib/app-auth'
 
 export type ChatActionResult = {
   ok: boolean
@@ -12,6 +13,10 @@ export type ChatActionResult = {
 
 const cleanText = (value: unknown, maxLength: number) =>
   typeof value === 'string' ? value.trim().slice(0, maxLength) : ''
+
+// Local API memakai req.user untuk hook & aturan akses koleksi. Objek user aplikasi
+// sudah berisi `collection: 'users'`, jadi cukup diteruskan apa adanya.
+const asRequestUser = (user: CurrentAppUser) => user as never
 
 export async function switchDemoPersona(role: 'petani' | 'pembeli'): Promise<{ ok: boolean }> {
   await setDemoRole(role)
@@ -39,25 +44,34 @@ export async function startConversation(input: {
     return { ok: false, message: 'Anda tidak dapat membuat percakapan dengan diri sendiri.' }
   }
 
-  // Demo / Catalog room fallback for instant demo feedback
-  const isDemoMode = user.id.startsWith('demo-') || recipientId.startsWith('catalog-') || recipientId.startsWith('demo-')
-  if (isDemoMode) {
-    const syntheticRoomId = recipientId.startsWith('catalog-')
-      ? `room-${recipientId}`
-      : `room-demo-${recipientId}`
+  // Sesi demo (tamu) tidak menyimpan apa pun ke database; cukup kembalikan ruang simulasi.
+  if (user.id.startsWith('demo-')) {
     return {
       ok: true,
       message: 'Ruang negosiasi siap digunakan.',
-      conversationId: syntheticRoomId,
+      conversationId: `room-demo-${recipientId}`,
+    }
+  }
+
+  // Kartu katalog memakai ID tiruan (catalog-*), bukan akun pengguna sungguhan.
+  // Ruang chat tidak bisa dibuat untuknya, jadi beri pesan jelas daripada ruang kosong.
+  if (recipientId.startsWith('catalog-') || recipientId.startsWith('demo-')) {
+    return {
+      ok: false,
+      message: 'Pembeli ini belum memiliki akun PanenTara. Pilih kontak pembeli terdaftar.',
     }
   }
 
   const payload = await getPayload({ config })
 
   try {
+    // Pemeriksaan penerima dilakukan di server dengan hak penuh, lalu dibatasi secara
+    // eksplisit: penerima harus ada dan berperan lawan dari pengirim. Data penerima
+    // (termasuk email) tidak dikembalikan ke browser.
     const recipient = await payload.findByID({
       collection: 'users',
       id: recipientId,
+      depth: 0,
       overrideAccess: true,
     })
 
@@ -71,7 +85,8 @@ export async function startConversation(input: {
         and: [{ participants: { contains: user.id } }, { participants: { contains: recipientId } }],
       },
       limit: 1,
-      overrideAccess: true,
+      user: asRequestUser(user),
+      overrideAccess: false,
     })
 
     let conversationId = existing.docs[0]?.id
@@ -87,7 +102,8 @@ export async function startConversation(input: {
           lastMessageAt: openingMessage ? new Date().toISOString() : undefined,
         },
         context: { chatAction: true },
-        overrideAccess: true,
+        user: asRequestUser(user),
+      overrideAccess: false,
       })
       conversationId = conversation.id
     }
@@ -102,16 +118,21 @@ export async function startConversation(input: {
           body: openingMessage,
         },
         context: { chatAction: true },
-        overrideAccess: true,
+        user: asRequestUser(user),
+      overrideAccess: false,
       })
     }
+
+    // Muat ulang daftar ruang chat di halaman agar percakapan baru langsung tampil.
+    revalidatePath('/dashboard/buyer-matching')
 
     return {
       ok: true,
       message: existing.docs[0] ? 'Percakapan dibuka kembali.' : 'Ruang chat berhasil dibuat.',
       conversationId: String(conversationId),
     }
-  } catch {
+  } catch (error) {
+    console.error('[startConversation]', error)
     return { ok: false, message: 'Ruang chat belum dapat dibuat. Silakan coba lagi.' }
   }
 }
@@ -141,7 +162,8 @@ export async function sendMessage(input: {
     const conversation = await payload.findByID({
       collection: 'conversations',
       id: conversationId,
-      overrideAccess: true,
+      user: asRequestUser(user),
+      overrideAccess: false,
     })
 
     const participants = conversation.participants.map((participant) =>
@@ -157,7 +179,8 @@ export async function sendMessage(input: {
         body,
       },
       context: { chatAction: true },
-      overrideAccess: true,
+      user: asRequestUser(user),
+      overrideAccess: false,
     })
 
     await payload.update({
@@ -168,11 +191,14 @@ export async function sendMessage(input: {
         lastMessageAt: new Date().toISOString(),
       },
       context: { chatAction: true },
-      overrideAccess: true,
+      user: asRequestUser(user),
+      overrideAccess: false,
     })
 
+    revalidatePath('/dashboard/buyer-matching')
     return { ok: true, message: 'Pesan terkirim.', conversationId }
-  } catch {
+  } catch (error) {
+    console.error('[sendMessage]', error)
     return { ok: false, message: 'Pesan gagal dikirim. Silakan coba lagi.' }
   }
 }
